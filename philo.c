@@ -105,9 +105,6 @@ void    creat_philo(t_philo *p, t_elemt *philo)
     {
         philo[j].left_fork = &philo->forks[j];
         philo[j].right_fork = &(philo->forks[(j + 1) % p->nbr_philo]);
-        pthread_mutex_lock(&philo->last_et);
-        philo[j].last_eat = get_time();
-        pthread_mutex_unlock(&philo->last_et);
         j++;
     }
 
