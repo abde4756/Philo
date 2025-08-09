@@ -15,62 +15,49 @@
 void    *routine(void *t)
 {
     t_elemt *p = (t_elemt *)t;
-
-    p->eat_mutex = malloc(sizeof(pthread_mutex_t) * p->philo->nbr_philo);
-
     int     i;
-    int j ;
 
-    
     if(p->philo->num_eat != -1)
     {
-        j = 0 ;
-        while (j < p->philo->nbr_philo)
-        {
-            pthread_mutex_init(&p->eat_mutex[j], NULL);
-            j++;
-        }
-        
         i = 0;
         while (i < p->philo->num_eat)
         {
+            // Utiliser eat_mutex partagé, pas alloué localement
             pthread_mutex_lock(&p->eat_mutex[p->idx_philo - 1]);
-            if(p->philo->flag_eat == 2)
+            if(check_death(p->philo))
             {
                 pthread_mutex_unlock(&p->eat_mutex[p->idx_philo - 1]);
-                printf("Philosopher %d is died.\n", p->idx_philo);
-                break;
+                break;  // Pas de message, le moniteur s'en occupe
             }
             pthread_mutex_unlock(&p->eat_mutex[p->idx_philo - 1]);
-            eting_ph(p, p->philo);
-            sleeping_ph(p, p->philo);
-            thinking_ph(p, p->philo);
+            
+            if(thinking_ph(p, p->philo) == -1)
+                break;
+            if(eting_ph(p, p->philo) == -1)
+                break;
+            if(sleeping_ph(p, p->philo) == -1)
+                break;
             i++;
         }
     }
     else
     {
-        j = 0 ;
-        while (j < p->philo->nbr_philo)
-        {
-            pthread_mutex_init(&p->eat_mutex[j], NULL);
-            j++;
-        }
         while (1)
         {
+            // Utiliser eat_mutex partagé, pas alloué localement
             pthread_mutex_lock(&p->eat_mutex[p->idx_philo - 1]);
-            if(p->philo->flag_eat == 2 )
+            if(check_death(p->philo))
             {
                 pthread_mutex_unlock(&p->eat_mutex[p->idx_philo - 1]);
-                printf("Philosopher %d is died.\n", p->idx_philo);
-                break;
+                break;  // Pas de message, le moniteur s'en occupe
             }
             pthread_mutex_unlock(&p->eat_mutex[p->idx_philo - 1]);
+            
+            if(thinking_ph(p, p->philo) == -1)
+                break;
             if(eting_ph(p, p->philo) == -1)
                 break;
             if(sleeping_ph(p, p->philo) == -1)
-                break;
-            if(thinking_ph(p, p->philo) == -1)
                 break;
         } 
     }
@@ -85,13 +72,119 @@ unsigned long   get_time(void)
     return((t.tv_sec) * 1000 + (t.tv_usec) / 1000);
 }
 
-void    creat_philo(t_philo *p, t_elemt *philo)
+// FONCTION MONITEUR DÉDIÉE
+void    *monitor_routine(void *arg)
+{
+    t_elemt *philos = (t_elemt *)arg;
+    int nbr_philo = philos[0].philo->nbr_philo;
+    
+    while (1)
+    {
+        int i = 0;
+        int philos_finished = 0;  // Compteur des philosophes qui ont fini
+        
+        while (i < nbr_philo)
+        {
+            // Utiliser le tableau partagé eat_mutex (tous pointent vers philo[0].eat_mutex)
+            pthread_mutex_lock(&philos[0].eat_mutex[i]);
+            
+            // Vérifier si simulation doit s'arrêter
+            if (check_death(philos[0].philo))
+            {
+                pthread_mutex_unlock(&philos[0].eat_mutex[i]);
+                return NULL;  // Quelqu'un est déjà mort
+            }
+            
+            // NOUVEAU: Vérifier si ce philosophe a fini de manger
+            if (philos[0].philo->num_eat != -1 && 
+                philos[i].meals_eaten >= philos[0].philo->num_eat)
+            {
+                philos_finished++;
+            }
+            
+            // Calculer le temps depuis le dernier repas
+            unsigned long temps_actuel = get_time();
+            unsigned long temps_depuis_repas = temps_actuel - philos[i].last_eat;
+            
+            // MORT DÉTECTÉE ?
+            if (temps_depuis_repas > (unsigned long)philos[0].philo->time_to_die)
+            {
+                // Signal global de mort
+                set_death_flag(philos[0].philo);
+                
+                // Message de mort (format standard avec timestamp relatif)
+                unsigned long timestamp = temps_actuel - philos[0].philo->current;
+                printf("%lu %d died\n", timestamp, philos[i].idx_philo);
+                
+                pthread_mutex_unlock(&philos[0].eat_mutex[i]);
+                return NULL;  // Arrêter le moniteur
+            }
+            
+            pthread_mutex_unlock(&philos[0].eat_mutex[i]);
+            i++;
+        }
+        
+        // NOUVEAU: Si tous les philosophes ont fini de manger, arrêter la simulation
+        if (philos[0].philo->num_eat != -1 && philos_finished == nbr_philo)
+        {
+            return NULL;  // Simulation terminée avec succès
+        }
+        
+        // Vérifier chaque milliseconde
+        usleep(1000);
+    }
+    
+    return NULL;
+}
+
+void    cleanup_philosophers(t_philo *p, t_elemt *philo)
+{
+    int i;
+    
+    // Détruire les mutex des fourchettes
+    i = 0;
+    while (i < p->nbr_philo)
+    {
+        pthread_mutex_destroy(&philo->forks[i]);
+        pthread_mutex_destroy(&philo[i].last_et);
+        i++;
+    }
+    
+    // Détruire les mutex eat_mutex
+    i = 0;
+    while (i < p->nbr_philo)
+    {
+        pthread_mutex_destroy(&philo->eat_mutex[i]);
+        i++;
+    }
+    
+    // Libérer la mémoire
+    free(philo->forks);
+    free(philo->eat_mutex);
+    free(philo);
+    free(p);
+}
+
+int    creat_philo(t_philo *p, t_elemt *philo)
 {
     int i = 0;
     int k = 0; 
     
+    // Vérifier les allocations mémoire
     philo->forks = malloc(sizeof(pthread_mutex_t) * p->nbr_philo);
+    if (!philo->forks)
+    {
+        perror("Failed to allocate forks");
+        return (-1);
+    }
+    
     philo->eat_mutex = malloc(sizeof(pthread_mutex_t) * p->nbr_philo);
+    if (!philo->eat_mutex)
+    {
+        free(philo->forks);
+        perror("Failed to allocate eat_mutex");
+        return (-1);
+    }
     
     int j = 0;
     while (j < p->nbr_philo)
@@ -108,120 +201,65 @@ void    creat_philo(t_philo *p, t_elemt *philo)
         j++;
     }
 
-    i = 0  ;
+    while (k < p->nbr_philo)
+    {
+        if(pthread_mutex_init(&philo->eat_mutex[k], NULL) != 0)
+        {
+            perror("Failed to initialize mutex");
+            // Nettoyer les mutex déjà créés
+            while (--k >= 0)
+                pthread_mutex_destroy(&philo->eat_mutex[k]);
+            free(philo->forks);
+            free(philo->eat_mutex);
+            return (-1);
+        }
+        k++;
+    }
+    i = 0;
+    
+    // Initialiser last_eat avant de créer les threads
+    unsigned long start_time = get_time();
+    p->current = start_time;  // Temps de référence global
+    p->flag_current = 1;      // Marquer comme initialisé
     
     while (i < p->nbr_philo)
     {
         (philo[i]).idx_philo = i + 1;
         philo[i].philo = p;
+        philo[i].last_eat = start_time;  // Temps de début
+        philo[i].meals_eaten = 0;        // ← NOUVEAU: Initialiser compteur
+        
+        // IMPORTANT: Tous pointent vers le même tableau eat_mutex
+        philo[i].eat_mutex = philo[0].eat_mutex;
+        
+        i++;
+    }
+    
+    // Créer les threads des philosophes
+    i = 0;
+    while (i < p->nbr_philo)
+    {
         pthread_create(&philo[i].tid_philo, NULL, &routine, &philo[i]);
         i++;
     }
     
-    while (k < p->nbr_philo)
-    {
-        pthread_mutex_init(&philo->eat_mutex[k], NULL);
-        k++;
-    }
+    // Créer le thread moniteur
+    pthread_t monitor_thread;
+    pthread_create(&monitor_thread, NULL, &monitor_routine, philo);
+    
 
-    while (1)
-    {
-        j = 0;
-        while (j < p->nbr_philo)
-        {
-            pthread_mutex_lock(&philo->eat_mutex[j]);
-            if ((get_time() - philo[j].last_eat) > (unsigned long)p->time_to_die)
-            {
-                p->flag_eat = 2;
-                
-                pthread_mutex_unlock(&philo->eat_mutex[j]);
-                k = -1;
-                break; 
-            }
-            pthread_mutex_unlock(&philo->eat_mutex[j]);
-            j++;
-        }
-        if(k == -1)
-            break;
-    }
-
+    // Attendre que le moniteur détecte une mort
+    pthread_join(monitor_thread, NULL);
+    
+    // Attendre que tous les philosophes se terminent
     i = 0;
     while (i < p->nbr_philo)
     {
         pthread_join(philo[i].tid_philo, NULL);
         i++;
     }
-}
-
-    //  le problem de Deadlock 
-// void    change_fork(t_elemt *philo, t_philo *p)
-// {
-//     if(philo->idx_philo % 2 == 0)
-//     {
-        // pthread_mutex_lock(philo->left_fork);
-        // pthread_mutex_unlock(philo->right_fork);
-//     }
-//     else if (philo->idx_philo % 2 == 1)
-//     {
-            // pthread_mutex_unlock(philo->left_fork);
-            // pthread_mutex_lock(philo->right_fork);
-//     }
-// }
-
-// la gestion des treatheads le temps (eating ? sleeping)
-
-// void    treadth_manager(t_elemt *philo, t_philo *p)
-// {
-//     int    i;
     
-//     if(p->nbr_philo % 2 == 0)
-//     {
-//         usleep(1000);
-//         if(p->num_eat != 0)
-//         {
-//             i = 0;
-//             while (i < p->num_eat)
-//             {
-//                 sleeping_ph(philo, p);
-//                 eting_ph(philo, p);
-//                 i++;
-//             }
-            
-//         }
-//         else if(p->num_eat == 0)
-//         {
-//             while (1)
-//             {
-//                 sleeping_ph(philo, p);
-//                 eting_ph(philo, p);
-//             }
-               
-//         }
-//     }
-//     else if(p->nbr_philo % 2 != 1)
-//     {
-        
-//     }
-// }
-
-
-
-// void    *monitor(void *x)
-// {
-//     t_elemt *p = (t_elemt *)x;
-
-//     if(p->idx_philo % 2 == 0)
-//         usleep(1000);
-//     if(p->philo->num_eat == -1)
-//     {
-//         while (1)
-//         {
-            
-//             eting_ph(p, p->philo);
-            
-//             sleeping_ph(p, p->philo);
-            
-//             thinking_ph(p, p->philo);
-//         }
-//     }
-// }
+    // Nettoyer TOUTE la mémoire à la fin
+    cleanup_philosophers(p, philo);
+    return (0);
+}

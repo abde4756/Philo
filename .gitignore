@@ -1,0 +1,15 @@
+# Fichiers objets
+*.o
+
+# Exécutables
+philosopher
+a.out
+
+# Fichiers temporaires
+.vscode/
+*~
+*.swp
+*.swo
+
+# Debug files
+*.dSYM/

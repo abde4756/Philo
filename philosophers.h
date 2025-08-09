@@ -20,6 +20,7 @@ typedef struct s_philo
     unsigned long current;
     int     flag_current;
     int     flag_eat;
+    pthread_mutex_t flag_mutex;  // Mutex pour protéger flag_eat
 }   t_philo;
 
 typedef enum s_state
@@ -35,6 +36,7 @@ typedef struct s_elemt
     t_philo *philo;
     t_state state;
     int    idx_philo;
+    int    meals_eaten;        // ← NOUVEAU: Compteur de repas
     pthread_t   tid_philo;
     pthread_mutex_t *forks;
     pthread_mutex_t *eat_mutex;
@@ -46,6 +48,8 @@ typedef struct s_elemt
 
 int	ft_atoi(const char *str);
 void    initial_sct(t_philo *p);
+int     check_death(t_philo *p);
+void    set_death_flag(t_philo *p);
 //-----------------------
 
 
@@ -53,7 +57,8 @@ int    sleeping_ph(t_elemt *philo, t_philo *p);
 int    eting_ph(t_elemt *philo, t_philo *p);
 int    thinking_ph(t_elemt *philo, t_philo *p);
 
-void    creat_philo(t_philo *p, t_elemt *philo);
+int     creat_philo(t_philo *p, t_elemt *philo);
+void    cleanup_philosophers(t_philo *p, t_elemt *philo);
 void    *routine(void *p);
 void    initai_sct2(t_elemt *philo);
 unsigned long   get_time(void);

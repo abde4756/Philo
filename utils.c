@@ -39,3 +39,21 @@ int	ft_atoi(const char *str)
 	}
 	return (res * signe);
 }
+
+// Fonction thread-safe pour vérifier si la simulation doit s'arrêter
+int check_death(t_philo *p)
+{
+    int result;
+    pthread_mutex_lock(&p->flag_mutex);
+    result = (p->flag_eat == 2);
+    pthread_mutex_unlock(&p->flag_mutex);
+    return result;
+}
+
+// Fonction thread-safe pour signaler la mort
+void set_death_flag(t_philo *p)
+{
+    pthread_mutex_lock(&p->flag_mutex);
+    p->flag_eat = 2;
+    pthread_mutex_unlock(&p->flag_mutex);
+}
